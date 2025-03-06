@@ -8,6 +8,8 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.documents import Document
 from langchain_postgres import PGVector
 from langchain_postgres.vectorstores import PGVector
+from langchain_core.tools import tool
+
 
 load_dotenv()
 
@@ -37,17 +39,6 @@ class Memory():
             raise ValueError("Memory Type needs to be provided.")
         return mtype
             
-    def save_recall_memory(self, query: str, config: RunnableConfig):
-        """Save memory to vectorstore for later semantic retrieval."""
-        mtype = self.get_memory_type(config)
-
-        document = Document(
-                page_content=query + f" ; Timestamp:'{datetime.datetime.now().strftime('%d %B %Y,  %I:%M %p')}'", 
-                metadata={"mtype": mtype})
-        self.vector_store.add_documents([document])
-        print(f"Saving - {query} as {mtype}.")
-        return mtype
-
     def search_recall_memories(self, query: str, config: RunnableConfig):
         """Search for relevant memories."""
         mtype = self.get_memory_type(config)
@@ -57,3 +48,19 @@ class Memory():
         results = self.vector_store.similarity_search_by_vector(query_embeddings, k=3, filter=dict(mtype=mtype))
         return [doc.page_content for doc in results]
 
+
+@tool
+def save_recall_memory(chat: str, mtype: str):
+    """Save conversation (chat) as memory to vectorstore in collection name -mtype for later semantic retrieval."""
+    try:
+        memory = Memory()
+        current_datetime = datetime.datetime.now().strftime('%d %B %Y, %I:%M %p')
+        document = Document(
+            page_content=f"{chat} ; Timestamp: '{current_datetime}'", 
+            metadata={"mtype": mtype}
+        )
+        memory.vector_store.add_documents([document])
+        return {"message": [f"Successfully saved '{chat}' as {mtype}."]}
+
+    except Exception as e:
+        return {"message": ["Message failed to save."]}

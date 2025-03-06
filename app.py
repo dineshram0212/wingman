@@ -13,7 +13,8 @@ st.title("Wingman")
 
 
 client = Wingman(
-    model_name='qwen-2.5-32b', 
+    # model_name='mistral-saba-24b', 
+    model_name='llama-3.3-70b-versatile', 
     apiKey=os.getenv('API_KEY')
     )
 
