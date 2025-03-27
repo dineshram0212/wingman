@@ -4,8 +4,7 @@ from dotenv import load_dotenv
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from langchain_core.tools import tool
-
+from wingman.plugins.tool_decorator import tool
 
 load_dotenv()
 smtp_server = "smtp.gmail.com"
@@ -16,10 +15,15 @@ smtp_username = os.getenv('EMAIL_ADDRESS')
 smtp_password = os.getenv('APP_PASSWORD')
 
 @tool
-def send_email(subject, body, recipient_email):
-    '''
-    Sends email to the given recipient email address.
-    '''
+def send_email(subject: str, body: str, recipient_email: str):
+    """
+    Send an email to a given recipient.
+
+    :param subject: Email subject line.
+    :param body: Body of the email message.
+    :param recipient_email: The recipient email address.
+    """
+
     # Create a multipart message
     msg = MIMEMultipart()
     msg['From'] = sender_email

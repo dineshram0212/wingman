@@ -70,4 +70,9 @@ When the user provides information, determine if it needs to be stored and use t
 "- Do NOT use previous conversation messages to trigger tool calls.\n"
 "- If the user wants you to execute a tool, ensure they explicitly provide all required details in this current message.\n"
 "- If details (e.g., recipient, subject, body) for an email are missing, explicitly ask the user first."
+If the file is not guaranteed to exist or path is ambiguous, first use 'find_all_user_files'.
+You are not allowed to guess file paths.\n
+Only call 'write_file', 'open_file' or 'read_file' once you have confirmed the path.\n
+** Only after successfully finding the filepath should you proceed with the user's requested operation using the appropriate tool.
+\n**Don't respond with tool calls as <function> or <tool_call> tags inside content. Use proper formatted tool_calls. Use the available tool_calls functions if needed.**
 '''

@@ -14,6 +14,7 @@ from wingman.core.prompts import CLASSIFY_PROMPT, MODEL_PROMPT
 from wingman.core.model_loader import ModelLoader
 from wingman.utils.formatter import Classifier
 from wingman.plugins.email_tool import send_email
+from wingman.plugins.file_ops import read_file, write_file, find_all_user_files
 
 from wingman.core.memory import Memory, save_recall_memory
 
@@ -22,27 +23,20 @@ from wingman.core.memory import Memory, save_recall_memory
 class Wingman():
     def __init__(self, model_name, apiKey):
         self.memory = Memory()
-        
         self.tokenizer = tiktoken.encoding_for_model("gpt-4o")
         self.chats_by_thread_id = {}
-
-        self.tools = [save_recall_memory, send_email]
+        self.tools = [save_recall_memory, send_email, read_file, write_file, find_all_user_files]
         self.tool_node = ToolNode(self.tools)
         self.model_name = model_name
         self.apiKey = apiKey
         self.graph = self.load_graph_memory()
-
-
     
-
     def get_chat_history(self, thread_id: str):
         chat_history = self.chats_by_thread_id.get(thread_id)
         if chat_history is None:
             chat_history = InMemoryChatMessageHistory()
             self.chats_by_thread_id[thread_id] = chat_history
         return chat_history
-
-
 
     def classify_and_load_memory(self, state: MessagesState):
         chat = state['messages'][-1].content
@@ -73,7 +67,6 @@ class Wingman():
             recall_memories = self.memory.search_recall_memories(convo_str, config = {"configurable": {"mtype": mtype}})
             return recall_memories
 
-
     def should_continue(self, state: MessagesState):
         messages = state["messages"]
         last_message = messages[-1]
@@ -83,14 +76,13 @@ class Wingman():
         if isinstance(last_message, AIMessage) and hasattr(last_message, "tool_calls") and last_message.tool_calls:
             print("Routing to tool nodes")
             return "tools"
-        elif last_message.content.strip():  # If the AI has responded with content, end the workflow
+        elif last_message.content.strip():
             print("Ending workflow")
             return END
 
         print("Ending workflow")
         return END
     
-
     def call_model_after_tool(self, state: MessagesState, config: RunnableConfig):
         """A simplified model call function that only generates a response after tool execution."""
         if "configurable" not in config or "thread_id" not in config["configurable"]:
@@ -110,7 +102,6 @@ class Wingman():
             ]
         )
 
-        # Use the model without tool binding to prevent further tool calls
         llm = ModelLoader(model=self.model_name, apiKey=self.apiKey).load_model()
         chain = chat_template | llm
         chat_history = self.get_chat_history(config["configurable"]["thread_id"])
@@ -124,7 +115,6 @@ class Wingman():
             chat_history.add_messages([HumanMessage(content=human_message), AIMessage(content=ai_message)])
         
         return {"messages": [response]}
-    
 
     def call_model(self, state: MessagesState, config: RunnableConfig):
         if "configurable" not in config or "thread_id" not in config["configurable"]:
@@ -160,27 +150,20 @@ class Wingman():
             chat_history.add_messages([HumanMessage(content=human_message), AIMessage(content=ai_message)])
         return {"messages": [response]}
 
-
-
     def load_graph_memory(self):
-        # Create the graph and add nodes
         builder = StateGraph(MessagesState)
 
-        # Add edges to the graph
         builder.add_node("call_model", self.call_model)
         builder.add_node("call_model_after_tool", self.call_model_after_tool)
         builder.add_node("tools", self.tool_node)
 
         builder.add_edge(START, "call_model")
         builder.add_conditional_edges("call_model", self.should_continue, ["call_model", "call_model_after_tool", "tools", END])
-        # builder.add_conditional_edges("call_model_after_tool", lambda x: END, [END])
         builder.add_edge("tools", "call_model_after_tool")
 
-        # Compile the graph
         memory = MemorySaver()
         graph = builder.compile(checkpointer=memory)
         return graph
-    
     
     def chat(self, state: MessagesState, config):
         output = self.graph.invoke(state, config)

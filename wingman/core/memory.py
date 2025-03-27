@@ -8,7 +8,7 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.documents import Document
 from langchain_postgres import PGVector
 from langchain_postgres.vectorstores import PGVector
-from langchain_core.tools import tool
+from wingman.plugins.tool_decorator import tool
 
 
 load_dotenv()
@@ -51,7 +51,12 @@ class Memory():
 
 @tool
 def save_recall_memory(chat: str, mtype: str):
-    """Save conversation (chat) as memory to vectorstore in collection name -mtype for later semantic retrieval."""
+    """
+    Save conversation (chat) as memory to vectorstore in collection name -mtype for later semantic retrieval.
+
+    :param chat: The conversation or message history to store in memory.
+    :param mtype: The memory type or collection name (e.g., 'long_term', 'event').
+    """    
     try:
         memory = Memory()
         current_datetime = datetime.datetime.now().strftime('%d %B %Y, %I:%M %p')
