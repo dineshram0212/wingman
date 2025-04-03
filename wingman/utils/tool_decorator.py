@@ -31,6 +31,8 @@ def tool(fn: Callable) -> Dict[str, Any]:
     required = []
 
     for name, param in sig.parameters.items():
+        if name == "self":
+            continue  
         param_type = python_type_to_openai(param.annotation)
         description = param_docs.get(name, {}).get("description", "No description provided.")
         properties[name] = {

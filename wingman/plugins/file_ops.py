@@ -2,7 +2,7 @@ import os
 import psutil
 import subprocess
 import platform
-from wingman.plugins.tool_decorator import tool
+from wingman.utils.tool_decorator import tool
 
 
 @tool

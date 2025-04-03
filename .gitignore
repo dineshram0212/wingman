@@ -1,3 +1,6 @@
 .env
-
+./memory
+./frontend/node_modules
+./wingman/token.json
 ./wingman/plugins/calendar/token.json
+./wingman/plugins/calendar/credentials.json

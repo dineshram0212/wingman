@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from wingman.plugins.tool_decorator import tool
+from wingman.utils.tool_decorator import tool
 
 load_dotenv()
 smtp_server = "smtp.gmail.com"

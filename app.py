@@ -2,10 +2,8 @@ import os
 from dotenv import load_dotenv
 import datetime
 import streamlit as st
-from langgraph.graph import MessagesState
-from langchain_core.messages import HumanMessage
 
-from wingman.core.wingman import Wingman
+# from wingman.core.wingman import Wingman
 from wingman.core.wingmanOA import WingmanOpenAI
 
 load_dotenv()
@@ -51,9 +49,6 @@ if prompt := st.chat_input("What is up?"):
     with st.chat_message("user"):
         st.markdown(prompt)
 
-        # response = client.chat(MessagesState(messages=[
-        #     HumanMessage(content=msg["content"]) for msg in st.session_state.messages
-        # ]), config=config)
         response = client.run(user_input=prompt, thread_id=thread_id)
 
     with st.chat_message("assistant"):
