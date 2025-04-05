@@ -1,18 +1,18 @@
-
-
 import datetime
 import json
 import tiktoken
 import re
 
+
 from wingman.plugins.email_tool import send_email
 from wingman.plugins.file_ops import read_file, write_file, find_all_user_files, open_file
+from wingman.plugins.stocks import get_stock_news
+from wingman.plugins.notion_func import NotionClient
 from wingman.plugins.calendar.events import Calendar
-from wingman.core.memory import Memory
 
-import datetime
+from wingman.core.memory import Memory
 from wingman.core.model_loader import ModelLoader
-from wingman.core.prompts import CLASSIFY_PROMPT, MODEL_PROMPT
+from wingman.core.prompts import MODEL_PROMPT
 
 
 
@@ -20,6 +20,7 @@ class WingmanOpenAI:
     def __init__(self, model_name, api_key):
         self.memory = Memory()
         self.calender = Calendar()
+        self.notion = NotionClient()
         self.tokenizer = tiktoken.encoding_for_model("gpt-4o")
         self.tools = {
             "send_email": send_email,
@@ -27,9 +28,14 @@ class WingmanOpenAI:
             "write_file": write_file,
             "open_file": open_file,
             "find_all_user_files": find_all_user_files,
+            "get_stock_news": get_stock_news,
             "save_recall_memory": self.memory.save_recall_memory,
             "create_event": self.calender.create_event,
             "get_events": self.calender.get_events,
+            "create_dashboard": self.notion.create_dashboard,
+            "create_note_page": self.notion.create_note_page,
+            "create_todo_page": self.notion.create_todo_page,
+            "search_pages": self.notion.search_pages
         }
         self.model_name = model_name
         self.api_key = api_key
@@ -39,8 +45,6 @@ class WingmanOpenAI:
     def get_chat_history(self, thread_id):
         history = self.memory.get_thread_history(thread_id)
         return history if history else []
-
-
 
     def should_continue(self, context):
         last_msg = context["messages"][-1]
@@ -85,7 +89,6 @@ class WingmanOpenAI:
             return context
 
         return context
-
 
     def tool_node(self, context):
         last_msg = context["messages"][-1]
