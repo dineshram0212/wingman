@@ -1,170 +1,216 @@
 import datetime
-
 import tiktoken
-from langchain.prompts import  PromptTemplate
-from langchain_core.prompts.chat import ChatPromptTemplate, HumanMessagePromptTemplate
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from langchain_core.runnables import RunnableConfig
-from langgraph.checkpoint.memory import MemorySaver
-from langgraph.graph import START, END, MessagesState, StateGraph
-from langchain_core.chat_history import InMemoryChatMessageHistory
-from langgraph.prebuilt import ToolNode
+import re
 
-from wingman.core.prompts import CLASSIFY_PROMPT, MODEL_PROMPT
-from wingman.core.model_loader import ModelLoader
-from wingman.utils.formatter import Classifier
+from llama_index.core.agent.workflow import ReActAgent
+from llama_index.core.tools import FunctionTool
+from llama_index.core.llms import ChatMessage
+from llama_index.core.memory import ChatMemoryBuffer
+from wingman.plugins.stocks import YahooFinanceToolSpec
 from wingman.plugins.email_tool import send_email
-from wingman.plugins.file_ops import read_file, write_file, find_all_user_files
+from wingman.plugins.weather import get_weather
+from wingman.plugins.file_ops import FileOpsToolSpec
+from wingman.plugins.notion_func import NotionToolSpec
+from wingman.plugins.calendar.events import CalendarToolSpec
 
-from wingman.core.memory import Memory, save_recall_memory
-
+from wingman.core.memory import Memory
+from wingman.core.model_loader import ModelLoader
+from wingman.core.prompts import MODEL_PROMPT
 
 
 class Wingman():
-    def __init__(self, model_name, apiKey):
+    def __init__(self, model_name, api_key):
         self.memory = Memory()
         self.tokenizer = tiktoken.encoding_for_model("gpt-4o")
-        self.chats_by_thread_id = {}
-        self.tools = [save_recall_memory, send_email, read_file, write_file, find_all_user_files]
-        self.tool_node = ToolNode(self.tools)
-        self.model_name = model_name
-        self.apiKey = apiKey
-        self.graph = self.load_graph_memory()
-    
-    def get_chat_history(self, thread_id: str):
-        chat_history = self.chats_by_thread_id.get(thread_id)
-        if chat_history is None:
-            chat_history = InMemoryChatMessageHistory()
-            self.chats_by_thread_id[thread_id] = chat_history
-        return chat_history
+        self.model = ModelLoader(model_name, api_key=api_key).load_groq()
+        self.tools = [send_email, get_weather] \
+        + FileOpsToolSpec().to_tool_list() \
+        + YahooFinanceToolSpec().to_tool_list() + CalendarToolSpec().to_tool_list() + NotionToolSpec().to_tool_list()
+        self.memory_buffer = {}
+        self.agent_cache = {}
 
-    def classify_and_load_memory(self, state: MessagesState):
-        chat = state['messages'][-1].content
-        print("Query to be searched:\n", chat)
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                SystemMessage(
-                    content=(
-                        f"""
-                            Query: "{chat}"
-                            {CLASSIFY_PROMPT}
-                            """
-                    )
-                ),
-                HumanMessagePromptTemplate(prompt=PromptTemplate(input_variables=["messages"],template="{messages}"))
-            ]
-        )
-        
-        model = ModelLoader(model=self.model_name, apiKey=self.apiKey).load_model()
-        llm = model.with_structured_output(Classifier)
-        chain = prompt | llm
-        result = chain.invoke(chat)
-        mtype = result.mtype.strip()
-        if mtype == 'none':
-            return []
+    def get_chat_history(self, thread_id):
+        history = self.memory.get_thread_history(thread_id)
+        return history if history else []
+    
+    def classify_and_load_memory(self, user_input):
+        user_input_lower = user_input.lower()
+
+        long_keywords = [
+            r"\bi am\b", r"\bi'm\b", r"\bmy name\b", r"\bfather\b", r"\bmother\b", r"\bbrother\b",
+            r"\bsister\b", r"\bfamily\b", r"\buncle\b", r"\baunt\b", r"\bcousin\b"
+        ]
+        event_keywords = [
+            r"\bbirthday\b", r"\bmeeting\b", r"\baccident\b", r"\bevent\b", r"\bwedding\b", r"\bdate\b",
+            r"\bwhen\b", r"\bwhere\b", r"\bhappened\b"
+        ]
+
+        def matches_any(keywords):
+            return any(re.search(pattern, user_input_lower) for pattern in keywords)
+
+        if matches_any(long_keywords):
+            mtype = "long_term"
+        elif matches_any(event_keywords):
+            mtype = "event"
         else:
-            convo_str = self.tokenizer.decode(self.tokenizer.encode(chat))
-            recall_memories = self.memory.search_recall_memories(convo_str, config = {"configurable": {"mtype": mtype}})
-            return recall_memories
+            mtype = "none"
 
-    def should_continue(self, state: MessagesState):
-        messages = state["messages"]
-        last_message = messages[-1]
-        if hasattr(last_message, "name") and last_message.name:
-            print("Tool response received, getting final response from model")
-            return "call_model_after_tool"
-        if isinstance(last_message, AIMessage) and hasattr(last_message, "tool_calls") and last_message.tool_calls:
-            print("Routing to tool nodes")
-            return "tools"
-        elif last_message.content.strip():
-            print("Ending workflow")
-            return END
+        if mtype == "none":
+            return []
+            
+        return self.memory.search_recall_memories(user_input, config={"configurable": {"mtype": mtype}})
 
-        print("Ending workflow")
-        return END
+    def build_tools(self):
+        tools = []
+        for tool in self.tools:
+            if isinstance(tool, FunctionTool):
+                tools.append(tool)
+            elif callable(tool):
+                tools.append(FunctionTool.from_defaults(fn=tool, name=tool.__name__))
+            else:
+                raise TypeError(f"Unsupported tool type: {tool}")
+        return tools
+
+    def _initialize_agent(self, from_memory):
+        memory_context = "\n".join(from_memory) if from_memory else "No relevant memory found."
+        system_prompt = f"""
+                Today is {datetime.datetime.now().strftime('%d %B %Y, %I:%M %p')}.
+                Context loaded from memory:
+                {memory_context}
+                {MODEL_PROMPT}
+                """
+                
+        return ReActAgent(
+            system_prompt=system_prompt,
+            llm=self.model,
+            tools=self.build_tools(),
+            verbose=True
+        )
+
+    async def chat(self, query, thread_id):
+        history = self.get_chat_history(thread_id)
+        chat_messages = [ChatMessage(role=msg["role"], content=msg["content"]) for msg in history]
+        
+        from_memory = self.classify_and_load_memory(query)
+        
+        if thread_id not in self.memory_buffer:
+            self.memory_buffer[thread_id] = ChatMemoryBuffer.from_defaults(chat_history=chat_messages, token_limit=40000)
+        else:
+            for msg in chat_messages:
+                if msg not in self.memory_buffer[thread_id].get_all():
+                    self.memory_buffer[thread_id].put(msg)
+        if thread_id not in self.agent_cache:  
+            self.agent_cache[thread_id] = self._initialize_agent(from_memory)
+        
+        agent = self.agent_cache[thread_id]
+        response = await agent.run(query, memory=self.memory_buffer[thread_id])
+        response = response.response.blocks[0].text
+
+        self.memory.save_thread_history(thread_id, [
+            {"role": "user", "content": query},
+            {"role": "assistant", "content": str(response)}
+        ])
+        
+        self.memory_buffer[thread_id].put(ChatMessage(role="user", content=query))
+        self.memory_buffer[thread_id].put(ChatMessage(role="assistant", content=str(response)))
+        
+        return response
+
+
+# import datetime
+# import tiktoken
+# import re
+
+# from llama_index.core.agent.workflow import ReActAgent
+# from llama_index.core.tools import FunctionTool
+# from llama_index.core.llms import ChatMessage
+# from llama_index.core.memory import ChatMemoryBuffer
+# from llama_index.tools.yahoo_finance import YahooFinanceToolSpec
+# from wingman.plugins.email_tool import send_email
+# from wingman.plugins.file_ops import read_file, write_file, find_all_user_files, open_file
+# from wingman.plugins.notion_func import NotionClient
+# from wingman.plugins.calendar.events import Calendar
+
+# from wingman.core.memory import Memory
+# from wingman.core.model_loader import ModelLoader
+# from wingman.core.prompts import MODEL_PROMPT
+
+
+# class Wingman():
+#     def __init__(self, model_name, api_key):
+#         self.memory = Memory()
+#         self.tokenizer = tiktoken.encoding_for_model("gpt-4o")
+#         self.model = ModelLoader(model_name, api_key=api_key).load_groq()
+#         self.tools = [send_email, read_file, write_file, find_all_user_files, open_file] + YahooFinanceToolSpec().to_tool_list()
+#         self.agent = None
+
+#     def get_chat_history(self, thread_id):
+#         history = self.memory.get_thread_history(thread_id)
+#         return history if history else []
     
-    def call_model_after_tool(self, state: MessagesState, config: RunnableConfig):
-        """A simplified model call function that only generates a response after tool execution."""
-        if "configurable" not in config or "thread_id" not in config["configurable"]:
-            raise ValueError(
-                f"Make sure that the config includes the following information: {'configurable': {'thread_id': 'some_value'}}"
-            )
+#     def classify_and_load_memory(self, user_input):
+
+#         user_input_lower = user_input.lower()
+
+#         long_keywords = [
+#             r"\bi am\b", r"\bi'm\b", r"\bmy name\b", r"\bfather\b", r"\bmother\b", r"\bbrother\b",
+#             r"\bsister\b", r"\bfamily\b", r"\buncle\b", r"\baunt\b", r"\bcousin\b"
+#         ]
+#         event_keywords = [
+#             r"\bbirthday\b", r"\bmeeting\b", r"\baccident\b", r"\bevent\b", r"\bwedding\b", r"\bdate\b",
+#             r"\bwhen\b", r"\bwhere\b", r"\bhappened\b"
+#         ]
+
+#         def matches_any(keywords):
+#             return any(re.search(pattern, user_input_lower) for pattern in keywords)
+
+#         if matches_any(long_keywords):
+#             mtype = "long_term"
+#         elif matches_any(event_keywords):
+#             mtype = "event"
+#         else:
+#             mtype = "none"
+
+#         if mtype == "none":
+#             return []
+#         convo_str = self.tokenizer.decode(self.tokenizer.encode(user_input))
+#         return self.memory.search_recall_memories(convo_str, config={"configurable": {"mtype": mtype}})
+
+
+#     def build_tools(self):
+#         tools = []
+#         for tool in self.tools:
+#             if isinstance(tool, FunctionTool):
+#                 tools.append(tool)
+#             elif callable(tool):
+#                 tools.append(FunctionTool.from_defaults(fn=tool, name=tool.__name__))
+#             else:
+#                 raise TypeError(f"Unsupported tool type: {tool}")
+#         return tools
+
+#     async def chat(self, query, thread_id):
+#         history = self.get_chat_history(thread_id)
+#         history = [ChatMessage(role=msg["role"], content=msg["content"]) for msg in history]
+
+#         memory = ChatMemoryBuffer.from_defaults(chat_history=history, token_limit=40000)
+#         from_memory = self.classify_and_load_memory(query)
+#         model = self.model
+#         if not self.agent:
+#             self.agent = ReActAgent(
+#                 system_prompt=f"""
+#                         Today is {datetime.datetime.now().strftime('%d %B %Y,  %I:%M %p')}.
+#                         Context loaded from memory: {', '.join(from_memory)}
+#                         {MODEL_PROMPT}
+#                         """,
+#                 llm=model,
+#                 tools=self.build_tools()
+#             )
         
-        chat_template = ChatPromptTemplate.from_messages(
-            [
-                SystemMessage(
-                    content=(
-                        "You have just completed a tool operation. Now provide a final response to the user "
-                        "summarizing what was done. DO NOT use any more tools. Just respond directly to the user."
-                    )   
-                ),  
-                HumanMessagePromptTemplate(prompt=PromptTemplate(input_variables=["messages"],template="{messages}"))
-            ]
-        )
+#         handler = await self.agent.run(query, memory=memory)
+#         response = handler
+#         self.memory.save_thread_history(thread_id, [
+#         {"role": "user", "content": query},
+#         {"role": "assistant", "content": str(response)}
+#         ])
 
-        llm = ModelLoader(model=self.model_name, apiKey=self.apiKey).load_model()
-        chain = chat_template | llm
-        chat_history = self.get_chat_history(config["configurable"]["thread_id"])
-        recent_messages = state["messages"][-3:] 
-        response = chain.invoke(recent_messages)
-        
-        human_message = state["messages"][0].content
-        ai_message = response.content
-        
-        if ai_message != '':
-            chat_history.add_messages([HumanMessage(content=human_message), AIMessage(content=ai_message)])
-        
-        return {"messages": [response]}
-
-    def call_model(self, state: MessagesState, config: RunnableConfig):
-        if "configurable" not in config or "thread_id" not in config["configurable"]:
-            raise ValueError(
-            f"Make sure that the config includes the following information: {'configurable': {'thread_id': 'some_value'}}"
-        )
-        from_memory = self.classify_and_load_memory(state=state)
-        chat_template = ChatPromptTemplate.from_messages(
-            [
-                SystemMessage(
-                    content=(
-                        f"For reference, today's date and current time is {datetime.datetime.now().strftime('%d %B %Y,  %I:%M %p')}"
-                        f"Consider the suitable information from the given context loaded from memory: {','.join(from_memory)}\n\n. Don't consider tool calling based on the above memory."
-                        "DO NOT SAVE QUESTIONS TO MEMORY. Consider only the latest query of the user and remaining as memory."
-                        f"{MODEL_PROMPT}"
-                    )   
-                ),  
-                HumanMessagePromptTemplate(prompt=PromptTemplate(input_variables=["messages"],template="{messages}"))
-            ]
-        )
-
-        model = ModelLoader(model=self.model_name, apiKey=self.apiKey).load_model()
-        llm = model.bind_tools(self.tools)
-
-        chain = chat_template | llm
-        chat_history = self.get_chat_history(config["configurable"]["thread_id"])
-        
-        messages = list(chat_history.messages) + list(state["messages"]) if chat_history else state["messages"]
-        response = chain.invoke(messages)
-        human_message = state["messages"][-1].content
-        ai_message = response.content
-        if ai_message != '':
-            chat_history.add_messages([HumanMessage(content=human_message), AIMessage(content=ai_message)])
-        return {"messages": [response]}
-
-    def load_graph_memory(self):
-        builder = StateGraph(MessagesState)
-
-        builder.add_node("call_model", self.call_model)
-        builder.add_node("call_model_after_tool", self.call_model_after_tool)
-        builder.add_node("tools", self.tool_node)
-
-        builder.add_edge(START, "call_model")
-        builder.add_conditional_edges("call_model", self.should_continue, ["call_model", "call_model_after_tool", "tools", END])
-        builder.add_edge("tools", "call_model_after_tool")
-
-        memory = MemorySaver()
-        graph = builder.compile(checkpointer=memory)
-        return graph
-    
-    def chat(self, state: MessagesState, config):
-        output = self.graph.invoke(state, config)
-        return output["messages"][-1].content 
+#         return response

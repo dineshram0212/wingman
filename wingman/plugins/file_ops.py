@@ -2,9 +2,101 @@ import os
 import psutil
 import subprocess
 import platform
+from typing import List
 from wingman.utils.tool_decorator import tool
+from llama_index.core.tools.tool_spec.base import BaseToolSpec
 
 
+class FileOpsToolSpec(BaseToolSpec):
+    """ToolSpec for common file operations: read, write, open, and search."""
+
+    spec_functions = [
+        "write_file",
+        "read_file",
+        "open_file",
+        "find_all_user_files",
+    ]
+
+    def write_file(self, filename: str, content: str) -> str:
+        """Writes content to a file, creates it if necessary."""
+        try:
+            os.makedirs(os.path.dirname(filename), exist_ok=True)
+            with open(filename, 'w') as f:
+                f.write(content)
+            return f"Content written to {filename}"
+        except Exception as e:
+            return f"Error writing to file {filename}: {e}"
+
+    def read_file(self, filename: str) -> str:
+        """Reads content from a file and returns it."""
+        try:
+            with open(filename, 'r') as f:
+                return f.read()
+        except Exception as e:
+            return f"Error reading file {filename}: {e}"
+
+    def open_file(self, filename: str) -> str:
+        """Opens a file using the default system application."""
+        try:
+            if platform.system() == "Windows":
+                os.startfile(filename)
+            elif platform.system() == "Darwin":
+                subprocess.run(["open", filename])
+            else:
+                subprocess.run(["xdg-open", filename])
+            return f"Opened file: {filename}"
+        except Exception as e:
+            return f"Failed to open file: {str(e)}"
+
+    def find_all_user_files(self, filename: str, target_directory: str = None) -> List[str]:
+        """
+        Searches for all matching filenames in user folders and mounted local drives.
+        Returns a list of file paths where matches were found.
+        """
+        def get_usable_drives():
+            drives = []
+            for p in psutil.disk_partitions(all=False):
+                if os.name == "nt":
+                    if 'cdrom' in p.opts or p.fstype == '':
+                        continue
+                drives.append(p.mountpoint)
+            if 'C:\\' in drives:
+                drives.remove('C:\\')
+            home_dir = os.path.expanduser("~")
+            base_dirs = [
+                os.path.join(home_dir, "Documents"),
+                os.path.join(home_dir, "Desktop"),
+                os.path.join(home_dir, "Downloads"),
+            ]
+            base_dirs += drives
+            return base_dirs
+
+        search_dirs = get_usable_drives()
+
+        if target_directory:
+            home = os.path.expanduser("~")
+            prioritized = os.path.join(home, target_directory)
+            if os.path.exists(prioritized):
+                search_dirs.insert(0, prioritized)
+
+        matches = []
+        skip_dirs = {
+            "windows", "program files", "program files (x86)", "system volume information",
+            "$recycle.bin", "node_modules", "venv", "env",
+            "dist", "build", "out", "tmp", "temp", "log", "logs"
+        }
+
+        for directory in search_dirs:
+            for root, dirs, files in os.walk(directory):
+                dirs[:] = [d for d in dirs if d.lower() not in skip_dirs and not d.startswith((".", "_", "$"))]
+                for f in files:
+                    if filename.lower() in f.lower():
+                        matches.append(os.path.join(root, f))
+
+        return matches
+
+
+# Direct Tools
 @tool
 def write_file(filename: str, content: str):
     """

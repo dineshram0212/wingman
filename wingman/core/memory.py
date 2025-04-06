@@ -5,7 +5,6 @@ from dotenv import load_dotenv
 
 import chromadb
 from sentence_transformers import SentenceTransformer
-
 from langchain_core.runnables import RunnableConfig
 from wingman.utils.tool_decorator import tool
 
@@ -14,7 +13,6 @@ load_dotenv()
 class Memory:
     def __init__(self):
         self.client = chromadb.PersistentClient(path="./memory/chroma_db")
-
         self.model = SentenceTransformer("all-MiniLM-L6-v2")
         self.collection = self.client.get_or_create_collection(name="wingman_memory")
 
@@ -56,42 +54,88 @@ class Memory:
         )
 
     def get_thread_history(self, thread_id: str):
-        results = self.collection.get(where={"thread_id": thread_id})
-        return json.loads(results["documents"][0]) if results["documents"] else []
+        try:
+            results = self.collection.get(where={"thread_id": thread_id})
+
+            if results["documents"] and len(results["documents"]) > 0:
+                return json.loads(results["documents"][0])
+            return []
+        except Exception as e:
+            print(f"Error retrieving thread history: {e}")
+            return []
+
 
     def save_thread_history(self, thread_id: str, conversation: list):
         """
         Save the full conversation (as a list of message dicts) for a thread.
         """
         existing_history = self.get_thread_history(thread_id)
-        updated_history = existing_history + conversation
+        updated_history = existing_history
 
-        metadata = {
+        for msg in conversation:
+            if msg not in updated_history:
+                updated_history.append(msg)
+
+
+        metadata = [{
             "mtype": "history",
             "thread_id": thread_id,
             "timestamp": datetime.datetime.now().isoformat()
-        }
+        }]
 
-        self.collection.add(
-            documents=[json.dumps(updated_history)], 
-            embeddings=[self.embed(json.dumps(updated_history))],
-            metadatas=[metadata],
-            ids=[thread_id]
-        )
+        try:
+            existing_entries = self.collection.get(
+                where={"thread_id": thread_id}
+            )
+            
+            # If thread history exists, update it
+            if existing_entries["ids"] and len(existing_entries["ids"]) > 0:
+                thread_doc_id = existing_entries["ids"][0]
+                
+                self.collection.update(
+                    ids=[thread_doc_id],
+                    documents=[json.dumps(updated_history)],
+                    embeddings=[self.embed(json.dumps(updated_history))],
+                    metadatas= metadata
+                )
+            else:
+                # If no thread history exists, create a new entry
+                self.collection.add(
+                    documents=[json.dumps(updated_history)],
+                    embeddings=[self.embed(json.dumps(updated_history))],
+                    metadatas=metadata,
+                    ids=[f"thread_{thread_id}"]
+                )
+                
+        except Exception as e:
+            print(f"Error saving thread history: {e}")
+            # If update fails, try adding a new document
+            try:
+                self.collection.add(
+                    documents=[json.dumps(updated_history)],
+                    embeddings=[self.embed(json.dumps(updated_history))],
+                    metadatas=metadata,
+                    ids=[f"thread_{thread_id}"]
+                )
+            except Exception as e2:
+                print(f"Failed to add new thread history: {e2}")
 
-    
     def delete_thread_history(self, thread_id: str):
-        collection = self.client.get_collection(name="wingman_memory")
-        collection.delete(where={"thread_id": thread_id})
-        
-        return self.client.clear_system_cache()
-
+        """
+        Delete all history documents for a specific thread.
+        """
+        try:
+            self.collection.delete(where={"thread_id": thread_id})
+            return {"success": True, "message": f"Thread {thread_id} history deleted"}
+        except Exception as e:
+            print(f"Error deleting thread history: {e}")
+            return {"success": False, "message": str(e)}
 
     @tool
     def save_recall_memory(self, chat: str, mtype: str):
         """
         Save conversation (chat) as memory to vectorstore for semantic retrieval.
-        - mtype can be: 'long_term' or 'event'.
+        :param mtype (str): 'long_term' or 'event'.
         """
         try:
             self.save_memory(chat, mtype)

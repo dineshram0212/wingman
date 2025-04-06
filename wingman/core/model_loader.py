@@ -1,3 +1,4 @@
+from llama_index.llms.groq import Groq
 from langchain_ollama import ChatOllama
 from langchain_groq import ChatGroq
 from langchain_openai import ChatOpenAI
@@ -8,9 +9,9 @@ class ModelLoader():
     '''
     Loads selected model into the Wingman
     '''
-    def __init__(self, model, apiKey):
+    def __init__(self, model, api_key):
         self.model = model
-        self.apiKey = apiKey
+        self.api_key = api_key
 
     def load_model(self):
         models = {'mistral-saba-24b': ChatGroq,'llama3.2': ChatOllama, 'qwen-2.5-32b':ChatGroq, 'llama-3.3-70b-versatile':ChatGroq, 'gpt-3.5':ChatOpenAI, 'gpt4':ChatOpenAI, 'claude3.5-sonnet':ChatAnthropic}
@@ -22,7 +23,7 @@ class ModelLoader():
         if self.model == 'llama3.2':
             return model_class(model=self.model, temperature=0.7)
 
-        return model_class(model=self.model, api_key=self.apiKey, temperature=0.6)
+        return model_class(model=self.model, api_key=self.api_key, temperature=0.6)
     
     def load_client(self):
         return OpenAI(
@@ -30,4 +31,6 @@ class ModelLoader():
             # base_url="http://localhost:11434/v1",
             api_key=self.apiKey
         )
-        
+    
+    def load_groq(self):
+        return Groq(model=self.model, api_key=self.api_key)
