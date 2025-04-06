@@ -1,0 +1,5 @@
+🌤️ Weather in Bengaluru, Karnataka, India:
+- Condition: Partly cloudy
+- Temperature: 30.3°C (Feels like 30.3°C)
+- Humidity: 40%
+- Wind Speed: 10.4 km/h

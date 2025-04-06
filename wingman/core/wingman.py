@@ -6,16 +6,16 @@ from llama_index.core.agent.workflow import ReActAgent
 from llama_index.core.tools import FunctionTool
 from llama_index.core.llms import ChatMessage
 from llama_index.core.memory import ChatMemoryBuffer
-from wingman.plugins.stocks import YahooFinanceToolSpec
-from wingman.plugins.email_tool import send_email
-from wingman.plugins.weather import get_weather
-from wingman.plugins.file_ops import FileOpsToolSpec
-from wingman.plugins.notion_func import NotionToolSpec
-from wingman.plugins.calendar.events import CalendarToolSpec
 
 from wingman.core.memory import Memory
 from wingman.core.model_loader import ModelLoader
 from wingman.core.prompts import MODEL_PROMPT
+from wingman.plugins.email_tool import send_email
+from wingman.plugins.weather import get_weather
+from wingman.plugins.stocks import YahooFinanceToolSpec
+from wingman.plugins.file_ops import FileOpsToolSpec
+from wingman.plugins.notion_func import NotionToolSpec
+from wingman.plugins.calendar.events import CalendarToolSpec
 
 
 class Wingman():
@@ -24,8 +24,8 @@ class Wingman():
         self.tokenizer = tiktoken.encoding_for_model("gpt-4o")
         self.model = ModelLoader(model_name, api_key=api_key).load_groq()
         self.tools = [send_email, get_weather] \
-        + FileOpsToolSpec().to_tool_list() \
-        + YahooFinanceToolSpec().to_tool_list() + CalendarToolSpec().to_tool_list() + NotionToolSpec().to_tool_list()
+            + FileOpsToolSpec().to_tool_list() + YahooFinanceToolSpec().to_tool_list() \
+            + CalendarToolSpec().to_tool_list() + NotionToolSpec().to_tool_list()
         self.memory_buffer = {}
         self.agent_cache = {}
 

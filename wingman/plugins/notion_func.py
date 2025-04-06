@@ -10,6 +10,12 @@ load_dotenv()
 class NotionToolSpec(BaseToolSpec):
     """Notion Client Tool Spec"""
 
+    spec_functions = [
+        "create_dashboard",
+        "create_note_page",
+        "create_todo_page"
+    ]
+
     def __init__(self, version: str = "2022-06-28") -> None:
         super().__init__()
         self.token = os.getenv('NOTION_TOKEN')
